@@ -3,16 +3,10 @@
 Notes and PoC material for a WebKit/ANGLE chain on iOS 26.1. This is not a full exploit; it separates verified primitives from the pieces that still fail.
 
 **Author:** [0xjohnny](https://x.com/0xjohnny)<br>
-**Based on:** [jir4vv1t's CVE-2025-43529 exploit](https://github.com/jir4vv1t/CVE-2025-43529)<br>
+**Based on:** [jir4vv1t's CVE-2025-43529 exploit](https://github.com/jir4vv1t/CVE-2025-43529) — the UAF trigger, butterfly reclaim, and `addrof`/`fakeobj` primitives are theirs. My additions are the ANGLE OOB plumbing, PAC-focused analysis, and iOS 26.1 validation.<br>
 **Status:** Partial chain; arbitrary R/W not proven<br>
 **Test Device:** iPhone 11 Pro Max, iOS 26.1<br>
 **Last Updated:** January 2026
-
----
-
-## Scope and credit
-
-The CVE-2025-43529 UAF trigger, butterfly reclaim, and `addrof`/`fakeobj` primitives are based on **[jir4vv1t's work](https://github.com/jir4vv1t/CVE-2025-43529)**. My additions are the ANGLE OOB plumbing, PAC-focused analysis, and iOS 26.1 validation.
 
 ## Overview
 
@@ -23,15 +17,13 @@ Two WebKit CVEs disclosed together and reported as in-the-wild use by Apple.
 | CVE-2025-43529 | JavaScriptCore | Use-After-Free | DFG JIT missing write barrier leads to GC freeing live objects |
 | CVE-2025-14174 | ANGLE (GPU) | Out-of-Bounds Write | Metal backend uses wrong height for staging buffer allocation |
 
----
-
 ## CVE-2025-43529: WebKit DFG Store Barrier UAF
 
 ### Root Cause
 
-The bug is in JavaScriptCore's DFG JIT, specifically the **Store Barrier Insertion Phase** (`DFGStoreBarrierInsertionPhase.cpp`).
+The bug is in JavaScriptCore's DFG JIT, specifically the Store Barrier Insertion Phase (`DFGStoreBarrierInsertionPhase.cpp`).
 
-When a **Phi node escapes** but its **Upsilon inputs are not marked as escaped**, later stores miss a write barrier. That allows GC to free objects that are still reachable.
+When a Phi node escapes but its Upsilon inputs are not marked as escaped, later stores miss a write barrier. That allows GC to free objects that are still reachable.
 
 ### Trigger Mechanism
 
@@ -76,15 +68,6 @@ unboxed_arr[0] = itof(addr);  // Write address as float64
 fake = boxed_arr[0];          // Read as object = fakeobj
 ```
 
-### Current results (iPhone 11 Pro Max, iOS 26.1)
-
-- **addrof/fakeobj:** Verified in probe runs
-- **Address leaking:** 20+ object addresses captured per run
-- **Inline-storage read/write:** Verified against known inline slots (object-address-based)
-- **Arbitrary R/W:** Not proven; backing-store scan proof fails in current runs
-
----
-
 ## CVE-2025-14174: ANGLE Metal Backend OOB Write
 
 ### Root cause
@@ -104,20 +87,16 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F,
               256, 256, 0, gl.DEPTH_COMPONENT, gl.FLOAT, 0);
 ```
 
----
-
 ## The PAC problem
 
-### What's blocking full exploitation
-
-On arm64e (iPhone 11 Pro Max), **Pointer Authentication Codes** protect critical JSC pointers:
+On arm64e (iPhone 11 Pro Max), Pointer Authentication Codes protect critical JSC pointers:
 
 | Pointer | Protected | Result |
 |---------|-----------|--------|
 | TypedArray `m_vector` | Yes | Cannot fake TypedArray with arbitrary backing store |
 | JSArray `butterfly` | Yes | Cannot fake JSArray with arbitrary butterfly |
 
-When I try to create a fake TypedArray/JSArray with an arbitrary data pointer, PAC verification fails and crashes:
+Trying to create a fake TypedArray/JSArray with an arbitrary data pointer fails PAC verification and crashes:
 
 ```
 Exception: EXC_BAD_ACCESS
@@ -125,38 +104,26 @@ KERN_INVALID_ADDRESS at 0x0001fffffffffffc -> 0x0000007ffffffffc
 (possible pointer authentication failure)
 ```
 
-### Why the original confusion works
+The original type confusion works because both arrays use legitimately signed butterfly pointers — it's just reinterpreting the same memory. Fake objects with arbitrary unsigned pointers crash on the PAC check.
 
-The type confusion succeeds because both arrays use **legitimately signed** butterfly pointers - we're just reinterpreting the same memory. Fake objects with arbitrary unsigned pointers crash on PAC check.
-
-### Unproven bypass avenues
+Unproven bypass avenues:
 
 1. JIT paths that use a signed pointer from a legitimate object without re-authenticating attacker-controlled fields.
 2. A reachable signing gadget or API that signs a controlled data pointer with the right context.
 3. A different use of the ANGLE OOB that avoids fake TypedArray/JSArray backing stores entirely.
 
----
-
 ## Current capabilities
 
 | Primitive | Status | Notes |
 |-----------|--------|-------|
-| `addrof(obj)` | **Working** | Verified in probe |
-| `fakeobj(addr)` | **Working** | Verified against known objects |
-| Address leaking | **Working** | 20+ addresses per run |
-| Inline slot read/write | **Working** | Verified on known inline slots (object-address-based) |
+| `addrof(obj)` | Working | Verified in probe |
+| `fakeobj(addr)` | Working | Verified against known objects |
+| Address leaking | Working | 20+ addresses per run |
+| Inline slot read/write | Working | Verified on known inline slots (object-address-based) |
 | `read64(addr)` | Unverified | Constructed via inline-slot trick, proof failed |
 | `write64(addr)` | Unverified | Constructed via inline-slot trick, proof failed |
 
----
-
-## Evidence summary (latest probe run)
-
-- **Verified:** `addrof`, `fakeobj`, address leaks, inline-slot read/write on known objects
-- **Unverified:** arbitrary `read64`/`write64`, renderer→GPU escape chain, sandbox escape
-- **ANGLE probe:** WebGL2 PBO path implemented; trigger not confirmed in current runs
-
----
+Also unverified: renderer→GPU escape chain, sandbox escape. The ANGLE WebGL2 PBO probe is implemented but the trigger isn't confirmed in current runs.
 
 ## Repository structure
 
@@ -169,21 +136,9 @@ The type confusion succeeds because both arrays use **legitimately signed** butt
     └── crash_logs/           # Example crash reports
 ```
 
----
-
-## Acknowledgments
-
-The CVE-2025-43529 trigger, butterfly reclaim technique, and `addrof`/`fakeobj` construction are based on **[jir4vv1t/CVE-2025-43529](https://github.com/jir4vv1t/CVE-2025-43529)**. This repo adds iOS 26.1 validation, PAC notes, and ANGLE OOB plumbing.
-
----
-
 ## References
 
-- [jir4vv1t/CVE-2025-43529](https://github.com/jir4vv1t/CVE-2025-43529) - Original UAF exploit and analysis
+- [jir4vv1t/CVE-2025-43529](https://github.com/jir4vv1t/CVE-2025-43529) — original UAF exploit and analysis
 - WebKit Bugzilla: 302502, 303614
-- Apple Security Updates - iOS 26
+- Apple Security Updates — iOS 26
 - Google Threat Analysis Group
-
----
-
-**Current state:** useful for reproducing the JSC primitive and PAC blocker; not a complete exploit chain.
