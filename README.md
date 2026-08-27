@@ -2,7 +2,7 @@
 
 Notes and PoC material for a WebKit/ANGLE chain on iOS 26.1. This is not a full exploit; it separates verified primitives from the pieces that still fail.
 
-**Author:** [zeroxjf](https://x.com/zeroxjf)<br>
+**Author:** [0xjohnny](https://x.com/0xjohnny)<br>
 **Based on:** [jir4vv1t's CVE-2025-43529 exploit](https://github.com/jir4vv1t/CVE-2025-43529)<br>
 **Status:** Partial chain; arbitrary R/W not proven<br>
 **Test Device:** iPhone 11 Pro Max, iOS 26.1<br>
